@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { Outlet } from 'react-router-dom'
+import DeliverSafeAgentWidget from '../chat/DeliverSafeAgentWidget'
 import type { SensorRecord } from '../../types/dashboard'
 
 interface AppLayoutProps {
@@ -40,6 +41,7 @@ function AppLayout({ records }: AppLayoutProps) {
       </header>
 
       <Outlet />
+      <DeliverSafeAgentWidget />
     </div>
   )
 }
