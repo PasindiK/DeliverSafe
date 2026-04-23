@@ -9,6 +9,7 @@ interface ChatMessage {
 
 const WELCOME_MESSAGE =
   'Hi, I am your Virtual Assistant. Ask me about trends, anomalies, or how to navigate this dashboard.'
+const CHAT_CHART_CONTEXT_STORAGE_KEY = 'deliver_safe_chart_context_v1'
 
 function DeliverSafeAgentWidget() {
   const [isOpen, setIsOpen] = useState(false)
@@ -23,6 +24,27 @@ function DeliverSafeAgentWidget() {
     return count === 1 ? '1 message' : `${count} messages`
   }, [messages.length])
 
+  const readDashboardContext = () => {
+    if (typeof window === 'undefined') {
+      return null
+    }
+
+    try {
+      const raw = window.localStorage.getItem(CHAT_CHART_CONTEXT_STORAGE_KEY)
+      if (!raw) return null
+      return JSON.parse(raw) as {
+        filters?: {
+          bagId?: string
+          route?: string
+          hours?: number
+          anomaliesOnly?: boolean
+        }
+      }
+    } catch {
+      return null
+    }
+  }
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const text = inputValue.trim()
@@ -34,11 +56,13 @@ function DeliverSafeAgentWidget() {
 
     try {
       setIsSending(true)
+      const dashboardContext = readDashboardContext()
       const response = await askVirtualAssistant({
         message: text,
         dashboardState: {
           path: window.location.pathname,
-          hours: 24,
+          ...(dashboardContext?.filters ?? { hours: 24 }),
+          chartContext: dashboardContext,
         },
       })
 

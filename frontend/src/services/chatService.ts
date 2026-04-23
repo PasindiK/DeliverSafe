@@ -6,6 +6,9 @@ interface ChatRequestPayload {
     path?: string
     bagId?: string
     hours?: number
+    route?: string
+    anomaliesOnly?: boolean
+    chartContext?: unknown
   }
 }
 
@@ -43,4 +46,3 @@ export async function askVirtualAssistant(payload: ChatRequestPayload): Promise<
 
   return response.json()
 }
-

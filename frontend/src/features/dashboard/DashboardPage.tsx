@@ -56,6 +56,7 @@ interface MobileLocation {
 type DeliveryStatus = 'IDLE' | 'IN_TRANSIT' | 'COMPLETED'
 
 const MOBILE_BAG_ID = 'ESP32_BAG_01'
+const CHAT_CHART_CONTEXT_STORAGE_KEY = 'deliver_safe_chart_context_v1'
 const TILT_ALERT_THRESHOLD = 25
 const SENSOR_TEMP_WARNING_C = 40
 const SENSOR_TEMP_CRITICAL_C = 75
@@ -275,6 +276,49 @@ function DashboardPage({ records, availableBagIds = [] }: DashboardPageProps) {
   const leakTrendData = useMemo(() => {
     return buildLeakTrendData(filteredRecords)
   }, [filteredRecords])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const chartContext = {
+      generatedAt: new Date().toISOString(),
+      filters: {
+        bagId: filters.bagId,
+        route: filters.route,
+        hours: filters.hours,
+        anomaliesOnly: filters.anomaliesOnly,
+      },
+      chartData: {
+        tiltEventTimeline: tiltEvents.slice(-200).map((event) => ({
+          timestamp: event.timestamp,
+          bagId: event.bagId,
+          route: event.route,
+          deliveryPhase: event.deliveryPhase,
+          tiltDeg: event.tiltDeg,
+          severity: event.severity,
+          rainfallMm: event.rainfallMm,
+        })),
+        anomalyBreakdown: anomalyData,
+        temperatureHumidityTrend: trendData.slice(-200),
+        bagOpenCloseTimeline: bagLidEvents.slice(-200).map((event) => ({
+          timestamp: event.timestamp,
+          bagId: event.bagId,
+          route: event.route,
+          deliveryPhase: event.deliveryPhase,
+          eventType: event.eventType,
+          isUnexpected: event.isUnexpected,
+        })),
+        leakTrend: leakTrendData.slice(-200),
+      },
+      kpis,
+    }
+
+    try {
+      window.localStorage.setItem(CHAT_CHART_CONTEXT_STORAGE_KEY, JSON.stringify(chartContext))
+    } catch {
+      // Ignore localStorage quota/privacy failures.
+    }
+  }, [filters, tiltEvents, anomalyData, trendData, bagLidEvents, leakTrendData, kpis])
 
   const latestRecord = useMemo(() => {
     if (records.length === 0) {

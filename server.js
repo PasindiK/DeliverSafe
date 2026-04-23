@@ -842,6 +842,12 @@ app.post("/api/chat", requireAuth, async (req, res) => {
 
     const normalizedMessage = message.trim();
     const normalizedLower = normalizedMessage.toLowerCase();
+    const chartContext =
+      dashboardState && typeof dashboardState.chartContext === "object" && dashboardState.chartContext
+        ? dashboardState.chartContext
+        : null;
+    const isChartQuestion = /\b(chart|graph|timeline|plot|visual|table)\b/.test(normalizedLower);
+    const isTiltQuestion = /\btilt\b/.test(normalizedLower);
     const isGreetingOnly = /^(hi|hello|hey|hiya|good morning|good afternoon|good evening)\b[!. ]*$/i.test(
       normalizedLower
     );
@@ -854,6 +860,45 @@ app.post("/api/chat", requireAuth, async (req, res) => {
           bagId: "ALL",
           hours: 24,
           recordsConsidered: 0,
+        },
+      });
+    }
+
+    if (isChartQuestion && isTiltQuestion) {
+      const tiltTimeline = Array.isArray(chartContext?.chartData?.tiltEventTimeline)
+        ? chartContext.chartData.tiltEventTimeline
+        : [];
+
+      if (tiltTimeline.length === 0) {
+        return res.json({
+          answer:
+            "In the currently visible Tilt Event Timeline, there are no plotted tilt events for the active filters.",
+          context: {
+            bagId: dashboardState?.bagId || "ALL",
+            hours: Number.isFinite(Number(dashboardState?.hours)) ? Number(dashboardState?.hours) : 24,
+            recordsConsidered: 0,
+          },
+        });
+      }
+
+      const sortedTiltEvents = tiltTimeline
+        .slice()
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      const latestTiltEvent = sortedTiltEvents[sortedTiltEvents.length - 1];
+      const criticalCount = sortedTiltEvents.filter((event) => event.severity === "Critical").length;
+      const moderateCount = sortedTiltEvents.filter((event) => event.severity === "Moderate").length;
+
+      return res.json({
+        answer:
+          `From the currently visible Tilt Event Timeline: ${sortedTiltEvents.length} plotted tilt event(s)` +
+          ` (${moderateCount} moderate, ${criticalCount} critical). ` +
+          `Latest event: ${new Date(latestTiltEvent.timestamp).toLocaleString()} ` +
+          `for bag ${latestTiltEvent.bagId} at ${Number(latestTiltEvent.tiltDeg).toFixed(1)}° ` +
+          `(${latestTiltEvent.severity.toLowerCase()}).`,
+        context: {
+          bagId: dashboardState?.bagId || "ALL",
+          hours: Number.isFinite(Number(dashboardState?.hours)) ? Number(dashboardState?.hours) : 24,
+          recordsConsidered: sortedTiltEvents.length,
         },
       });
     }
@@ -903,6 +948,8 @@ app.post("/api/chat", requireAuth, async (req, res) => {
       path: typeof dashboardState?.path === "string" ? dashboardState.path : "/overview",
       bagId: requestedBagId || "ALL",
       hours: requestedHours,
+      activeFilters: chartContext?.filters || null,
+      chartContext: chartContext?.chartData || null,
       totalRecords: records.length,
       totalSensorRecords: sensorRecords.length,
       leakEvents,
@@ -932,6 +979,7 @@ app.post("/api/chat", requireAuth, async (req, res) => {
     const systemPrompt =
       "You are the DeliverSafe Virtual Assistant for an IoT food-delivery dashboard. " +
       "Answer using ONLY the provided analytics context. Keep responses practical and concise. " +
+      "When the user asks about charts/graphs/timelines, prioritize chartContext values and visible filter context over generic latest-record summaries. " +
       "When data is missing, say so clearly. Help with trends, anomalies, comparisons, and decision guidance.";
 
     const upstreamResponse = await fetch(`${XAI_API_BASE_URL}/chat/completions`, {
