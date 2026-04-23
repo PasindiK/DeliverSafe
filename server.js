@@ -841,6 +841,23 @@ app.post("/api/chat", requireAuth, async (req, res) => {
     }
 
     const normalizedMessage = message.trim();
+    const normalizedLower = normalizedMessage.toLowerCase();
+    const isGreetingOnly = /^(hi|hello|hey|hiya|good morning|good afternoon|good evening)\b[!. ]*$/i.test(
+      normalizedLower
+    );
+
+    if (isGreetingOnly) {
+      return res.json({
+        answer:
+          "Hi! I am DeliverSafe Agent. I can help with trends, anomalies, comparisons, and decision guidance from your dashboard data.",
+        context: {
+          bagId: "ALL",
+          hours: 24,
+          recordsConsidered: 0,
+        },
+      });
+    }
+
     const requestedBagId =
       typeof dashboardState?.bagId === "string" && dashboardState.bagId.trim()
         ? dashboardState.bagId.trim()

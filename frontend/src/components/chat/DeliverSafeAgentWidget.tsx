@@ -66,6 +66,11 @@ function DeliverSafeAgentWidget() {
     }
   }
 
+  const clearChat = () => {
+    if (isSending) return
+    setMessages([{ id: Date.now(), role: 'agent', text: WELCOME_MESSAGE }])
+  }
+
   return (
     <>
       <button
@@ -99,9 +104,21 @@ function DeliverSafeAgentWidget() {
             <p className="agent-panel-title">DeliverSafe Agent</p>
             <p className="agent-panel-subtitle">Virtual Assistant</p>
           </div>
-          <button type="button" className="agent-close-btn" onClick={() => setIsOpen(false)} aria-label="Close chat">
-            <span aria-hidden="true" className="agent-close-icon">×</span>
-          </button>
+          <div className="agent-header-actions">
+            <button
+              type="button"
+              className="agent-trash-btn"
+              onClick={clearChat}
+              aria-label="Clear chat"
+              title="Clear chat"
+              disabled={isSending}
+            >
+              <span aria-hidden="true" className="agent-trash-icon">🗑</span>
+            </button>
+            <button type="button" className="agent-close-btn" onClick={() => setIsOpen(false)} aria-label="Close chat">
+              <span aria-hidden="true" className="agent-close-icon">×</span>
+            </button>
+          </div>
         </header>
 
         <div className="agent-chat-meta">{messageCountLabel}</div>

@@ -1788,6 +1788,12 @@
   color: var(--muted);
 }
 
+.agent-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .agent-close-btn {
   border: 1px solid var(--border-strong);
   background: #ffffff;
@@ -1803,9 +1809,36 @@
   border-color: #93c5fd;
 }
 
+.agent-trash-btn {
+  border: 1px solid var(--border-strong);
+  background: #ffffff;
+  color: var(--text);
+  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.agent-trash-btn:hover {
+  border-color: #fca5a5;
+}
+
+.agent-trash-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .agent-close-icon {
   font-size: 1rem;
   font-weight: 700;
+  line-height: 1;
+}
+
+.agent-trash-icon {
+  font-size: 0.92rem;
   line-height: 1;
 }
 
