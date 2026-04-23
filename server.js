@@ -29,6 +29,9 @@ const RIDERS_COLLECTION_NAME = process.env.RIDERS_COLLECTION_NAME || "riders";
 const ROUTES_COLLECTION_NAME = process.env.ROUTES_COLLECTION_NAME || "routes";
 const JWT_SECRET = process.env.JWT_SECRET || "change-me-in-production";
 const JWT_EXPIRES_IN = "1d";
+const XAI_API_KEY = process.env.XAI_API_KEY || "";
+const XAI_API_BASE_URL = process.env.XAI_API_BASE_URL || "https://api.x.ai/v1";
+const XAI_MODEL = process.env.XAI_MODEL || "grok-3-mini";
 const AUTH_BOOTSTRAP_USERNAME = process.env.AUTH_BOOTSTRAP_USERNAME || "admin";
 const AUTH_BOOTSTRAP_PASSWORD = process.env.AUTH_BOOTSTRAP_PASSWORD || "admin123";
 const AUTH_BOOTSTRAP_ROLE = process.env.AUTH_BOOTSTRAP_ROLE || "admin";
@@ -821,6 +824,161 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.get("/api/auth/verify", requireAuth, (req, res) => {
   res.json({ valid: true, user: req.user });
+});
+
+app.post("/api/chat", requireAuth, async (req, res) => {
+  try {
+    if (!collection) {
+      return res.status(503).json({ error: "Database not connected" });
+    }
+    if (!XAI_API_KEY) {
+      return res.status(503).json({ error: "Missing XAI_API_KEY in server environment" });
+    }
+
+    const { message, dashboardState } = req.body || {};
+    if (typeof message !== "string" || !message.trim()) {
+      return res.status(400).json({ error: "message is required" });
+    }
+
+    const normalizedMessage = message.trim();
+    const normalizedLower = normalizedMessage.toLowerCase();
+    const isGreetingOnly = /^(hi|hello|hey|hiya|good morning|good afternoon|good evening)\b[!. ]*$/i.test(
+      normalizedLower
+    );
+
+    if (isGreetingOnly) {
+      return res.json({
+        answer:
+          "Hi! I am DeliverSafe Agent. I can help with trends, anomalies, comparisons, and decision guidance from your dashboard data.",
+        context: {
+          bagId: "ALL",
+          hours: 24,
+          recordsConsidered: 0,
+        },
+      });
+    }
+
+    const requestedBagId =
+      typeof dashboardState?.bagId === "string" && dashboardState.bagId.trim()
+        ? dashboardState.bagId.trim()
+        : null;
+    const requestedHoursRaw = Number(dashboardState?.hours);
+    const requestedHours =
+      Number.isFinite(requestedHoursRaw) && requestedHoursRaw > 0 ? Math.min(requestedHoursRaw, 168) : 24;
+    const since = new Date(Date.now() - requestedHours * 60 * 60 * 1000);
+
+    const filter = { receivedAt: { $gte: since } };
+    if (requestedBagId && requestedBagId !== "ALL") {
+      filter.$or = [
+        { bagId: requestedBagId },
+        { bag_id: requestedBagId },
+        { deviceId: requestedBagId },
+        { device_id: requestedBagId },
+      ];
+    }
+
+    const docs = await collection.find(filter).sort({ receivedAt: -1 }).limit(150).toArray();
+    const records = docs.map(toSensorRecord);
+
+    const sensorRecords = records.filter((record) => (record.eventType || "SENSOR") === "SENSOR");
+    const leakEvents = sensorRecords.filter((record) => record.leakDetected).length;
+    const hotLeakEvents = sensorRecords.filter((record) => record.hotLeakDetected).length;
+    const coldLeakEvents = sensorRecords.filter((record) => record.coldLeakDetected).length;
+    const openEvents = sensorRecords.filter((record) => record.lidOpen).length;
+    const tiltEvents = sensorRecords.filter((record) => record.tiltDetected || Number(record.tiltDeg) > 25).length;
+
+    const avg = (values) => {
+      if (!values.length) return null;
+      return Number((values.reduce((sum, current) => sum + current, 0) / values.length).toFixed(2));
+    };
+
+    const avgHotTemperature = avg(sensorRecords.map((record) => Number(record.temperatureC)).filter(Number.isFinite));
+    const avgColdTemperature = avg(
+      sensorRecords.map((record) => Number(record.coldTemperatureC)).filter(Number.isFinite)
+    );
+    const avgHumidity = avg(sensorRecords.map((record) => Number(record.humidityPct)).filter(Number.isFinite));
+    const latestRecord = sensorRecords[0] || null;
+
+    const analyticsContext = {
+      path: typeof dashboardState?.path === "string" ? dashboardState.path : "/overview",
+      bagId: requestedBagId || "ALL",
+      hours: requestedHours,
+      totalRecords: records.length,
+      totalSensorRecords: sensorRecords.length,
+      leakEvents,
+      hotLeakEvents,
+      coldLeakEvents,
+      openEvents,
+      tiltEvents,
+      avgHotTemperature,
+      avgColdTemperature,
+      avgHumidity,
+      latestRecord: latestRecord
+        ? {
+            timestamp: latestRecord.timestamp,
+            bagId: latestRecord.bagId,
+            hotTempC: latestRecord.temperatureC,
+            coldTempC: latestRecord.coldTemperatureC,
+            humidityPct: latestRecord.humidityPct,
+            tiltDeg: latestRecord.tiltDeg,
+            hotLeakDetected: latestRecord.hotLeakDetected,
+            coldLeakDetected: latestRecord.coldLeakDetected,
+            lidOpen: latestRecord.lidOpen,
+            deliveryStatus: latestRecord.deliveryStatus,
+          }
+        : null,
+    };
+
+    const systemPrompt =
+      "You are the DeliverSafe Virtual Assistant for an IoT food-delivery dashboard. " +
+      "Answer using ONLY the provided analytics context. Keep responses practical and concise. " +
+      "When data is missing, say so clearly. Help with trends, anomalies, comparisons, and decision guidance.";
+
+    const upstreamResponse = await fetch(`${XAI_API_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${XAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: XAI_MODEL,
+        temperature: 0.2,
+        messages: [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content:
+              `Dashboard analytics context:\n${JSON.stringify(analyticsContext, null, 2)}\n\n` +
+              `User question:\n${normalizedMessage}`,
+          },
+        ],
+      }),
+    });
+
+    if (!upstreamResponse.ok) {
+      const upstreamBody = await upstreamResponse.text().catch(() => "");
+      return res.status(502).json({
+        error: `xAI request failed (${upstreamResponse.status})`,
+        details: upstreamBody.slice(0, 300),
+      });
+    }
+
+    const payload = await upstreamResponse.json();
+    const answer =
+      payload?.choices?.[0]?.message?.content?.trim() ||
+      "I could not generate an answer right now. Please try again.";
+
+    res.json({
+      answer,
+      context: {
+        bagId: analyticsContext.bagId,
+        hours: analyticsContext.hours,
+        recordsConsidered: analyticsContext.totalSensorRecords,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Legacy raw endpoint (kept for debugging)
