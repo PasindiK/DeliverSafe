@@ -1,0 +1,32 @@
+# OS / archive noise
+.DS_Store
+Thumbs.db
+__MACOSX/
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node dependencies and build output
+node_modules/
+frontend/node_modules/
+dist/
+build/
+coverage/
+frontend/dist/
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Generic Python cache
+__pycache__/
+*.pyc
