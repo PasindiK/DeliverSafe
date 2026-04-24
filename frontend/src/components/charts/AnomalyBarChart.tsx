@@ -13,6 +13,7 @@ import type { AnomalyBreakdownItem } from '../../types/dashboard'
 
 interface AnomalyBarChartProps {
   data: AnomalyBreakdownItem[]
+  selectedHours: number
 }
 
 const BAR_COLORS: Record<string, string> = {
@@ -23,16 +24,16 @@ const BAR_COLORS: Record<string, string> = {
   'Offline Sensor': '#334155',
 }
 
-function AnomalyBarChart({ data }: AnomalyBarChartProps) {
+function AnomalyBarChart({ data, selectedHours }: AnomalyBarChartProps) {
   const topIncidents = data.slice(0, 5)
-  const totalIncidents = topIncidents.reduce((total, item) => total + item.count, 0)
+  const timeWindowLabel = selectedHours === 1 ? 'Last 1 hour' : `Last ${selectedHours} hours`
 
   return (
     <section className="panel">
       <h2 className="panel-title">Anomaly Breakdown</h2>
-      <p className="panel-subtitle">Incident category counts for selected period</p>
+      <p className="panel-subtitle">Incident category counts for selected period ({timeWindowLabel})</p>
 
-      {topIncidents.length === 0 || totalIncidents === 0 ? (
+      {topIncidents.length === 0 ? (
         <div className="empty-state">No anomaly records in this selection.</div>
       ) : (
         <div className="chart-wrap">

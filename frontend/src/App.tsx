@@ -18,6 +18,12 @@ const INITIAL_HISTORY_LIMIT = 3000
 const LIVE_HISTORY_HOURS = 2
 const LIVE_HISTORY_LIMIT = 600
 const SENSOR_CACHE_KEY = 'smartbag_sensor_records_cache_v1'
+const API_HEALTH_WINDOW_MS = 5 * 60 * 1000
+
+interface ApiHealthMetrics {
+  latencyMs: number | null
+  errorRatePct: number | null
+}
 
 const loadCachedRecords = (): SensorRecord[] => {
   if (typeof window === 'undefined') return []
@@ -48,11 +54,31 @@ function App() {
   const [bagOptions, setBagOptions] = useState<string[]>([])
   const [usingMock, setUsingMock] = useState(false)
   const [backendReachable, setBackendReachable] = useState(true)
+  const [apiHealthMetrics, setApiHealthMetrics] = useState<ApiHealthMetrics>({
+    latencyMs: null,
+    errorRatePct: null,
+  })
   const [authUser, setAuthUser] = useState<AuthUser | null>(null)
   const [authStatus, setAuthStatus] = useState<'checking' | 'authenticated' | 'unauthenticated'>('checking')
 
   // Track whether we already loaded real data so polling can do incremental fetches
   const hasRealData = useRef(records.length > 0)
+  const pollHistoryRef = useRef<Array<{ timestampMs: number; success: boolean }>>([])
+
+  const recordApiPoll = (latencyMs: number, success: boolean) => {
+    const now = Date.now()
+    const recentPolls = pollHistoryRef.current.filter((entry) => now - entry.timestampMs <= API_HEALTH_WINDOW_MS)
+    recentPolls.push({ timestampMs: now, success })
+    pollHistoryRef.current = recentPolls
+
+    const failureCount = recentPolls.filter((entry) => !entry.success).length
+    const errorRatePct = recentPolls.length > 0 ? (failureCount / recentPolls.length) * 100 : null
+
+    setApiHealthMetrics({
+      latencyMs,
+      errorRatePct,
+    })
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -94,6 +120,9 @@ function App() {
     let cancelled = false
 
     async function loadRecords() {
+      const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+      let pollSuccess = false
+
       try {
         const recordFetchOptions = hasRealData.current
           ? { hours: LIVE_HISTORY_HOURS, limit: LIVE_HISTORY_LIMIT }
@@ -109,6 +138,8 @@ function App() {
         if (knownBags.length > 0) {
           setBagOptions(knownBags)
         }
+
+        pollSuccess = true
 
         if (real.length > 0) {
           setRecords(real)
@@ -146,6 +177,12 @@ function App() {
 
         if (!cancelled) {
           setBackendReachable(false)
+        }
+      } finally {
+        if (!cancelled) {
+          const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+          const latencyMs = Math.max(0, Math.round(endedAt - startedAt))
+          recordApiPoll(latencyMs, pollSuccess)
         }
       }
     }
@@ -207,7 +244,16 @@ function App() {
 
         <Route element={authStatus === 'authenticated' ? <AppLayout records={records} /> : <Navigate to="/login" replace />}>
           <Route path="/" element={<Navigate to="/overview" replace />} />
-          <Route path="/overview" element={<DashboardPage records={records} availableBagIds={bagOptions} />} />
+          <Route
+            path="/overview"
+            element={
+              <DashboardPage
+                records={records}
+                availableBagIds={bagOptions}
+                apiHealthMetrics={apiHealthMetrics}
+              />
+            }
+          />
           <Route path="/alerts" element={<AlertsPage records={records} />} />
           <Route path="*" element={<Navigate to="/overview" replace />} />
         </Route>
