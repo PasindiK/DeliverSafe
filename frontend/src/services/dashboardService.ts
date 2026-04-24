@@ -8,6 +8,7 @@ import type {
   KpiMetric,
   LeakStatusSummary,
   LeakTrendPoint,
+  LeakBagDistributionItem,
   SensorRecord,
   TiltEventPoint,
   TrendPoint,
@@ -469,6 +470,8 @@ export const buildTrendData = (records: SensorRecord[]): TrendPoint[] => {
   return Array.from(grouped.entries())
     .sort(([timeA], [timeB]) => new Date(timeA).getTime() - new Date(timeB).getTime())
     .map(([timestamp, value]) => ({
+      timestamp,
+      epochTime: new Date(timestamp).getTime(),
       time: new Date(timestamp).toLocaleTimeString([], {
         hour: '2-digit',
         minute: '2-digit',
@@ -586,6 +589,18 @@ export const buildBagLidEventPoints = (records: SensorRecord[]): BagLidEventPoin
     return []
   }
 
+  const normalizeDeliveryStatus = (
+    record: SensorRecord,
+  ): 'IDLE' | 'STARTED' | 'IN_TRANSIT' | 'COMPLETED' => {
+    if (record.deliveryStatus) {
+      return record.deliveryStatus
+    }
+
+    if (record.deliveryPhase === 'Transit') return 'IN_TRANSIT'
+    if (record.deliveryPhase === 'Dropoff') return 'COMPLETED'
+    return 'STARTED'
+  }
+
   const bagOrderMap = buildBagOrderMap(records)
   const latestLidStateByBag = new Map<string, boolean>()
   const hasInitialEventByBag = new Map<string, boolean>()
@@ -621,19 +636,67 @@ export const buildBagLidEventPoints = (records: SensorRecord[]): BagLidEventPoin
             minute: '2-digit',
           }),
           bagId: record.bagId,
+          bagName: record.bagId,
           bagOrder: bagOrderMap.get(record.bagId) ?? 0,
           route: record.route,
+          routeName: record.routeName ?? null,
+          riderId: record.riderId ?? null,
+          riderName: record.riderName ?? null,
+          deliveryId: record.deliveryId ?? null,
           eventType: currentState ? 'Open' : 'Close',
           deliveryPhase: record.deliveryPhase,
+          deliveryStatus: normalizeDeliveryStatus(record),
           isUnexpected: currentState && record.deliveryPhase === 'Transit',
         } satisfies BagLidEventPoint,
       ]
     })
 }
 
-export const buildLeakTrendData = (records: SensorRecord[]): LeakTrendPoint[] => {
+export const buildLeakTrendData = (records: SensorRecord[], selectedHours?: number): LeakTrendPoint[] => {
   if (records.length === 0) {
     return []
+  }
+
+  const shouldBucketTenMinutes = selectedHours === 1
+  if (shouldBucketTenMinutes) {
+    const bucketMs = 10 * 60 * 1000
+    const groupedByBucket = new Map<
+      number,
+      {
+        incidentCount: number
+        impactedBagIds: Set<string>
+      }
+    >()
+
+    records.forEach((record) => {
+      const timestampMs = new Date(record.timestamp).getTime()
+      if (!Number.isFinite(timestampMs)) return
+      const bucketStart = Math.floor(timestampMs / bucketMs) * bucketMs
+
+      const existing =
+        groupedByBucket.get(bucketStart) ?? {
+          incidentCount: 0,
+          impactedBagIds: new Set<string>(),
+        }
+
+      if (record.leakDetected) {
+        existing.incidentCount += 1
+        existing.impactedBagIds.add(record.bagId)
+      }
+
+      groupedByBucket.set(bucketStart, existing)
+    })
+
+    return Array.from(groupedByBucket.entries())
+      .sort(([first], [second]) => first - second)
+      .map(([bucketStart, grouped]) => ({
+        time: new Date(bucketStart).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+        incidentCount: grouped.incidentCount,
+        impactedBagCount: grouped.impactedBagIds.size,
+      }))
   }
 
   const groupedByTime = new Map<
@@ -725,6 +788,26 @@ export const buildLeakStatusSummary = (records: SensorRecord[]): LeakStatusSumma
   }
 }
 
+export const buildLeakDistributionByBag = (records: SensorRecord[]): LeakBagDistributionItem[] => {
+  if (records.length === 0) {
+    return []
+  }
+
+  const leakCounts = new Map<string, number>()
+
+  records.forEach((record) => {
+    if (!record.leakDetected) {
+      return
+    }
+
+    leakCounts.set(record.bagId, (leakCounts.get(record.bagId) ?? 0) + 1)
+  })
+
+  return Array.from(leakCounts.entries())
+    .map(([bagId, leakCount]) => ({ bagId, leakCount }))
+    .sort((first, second) => second.leakCount - first.leakCount || first.bagId.localeCompare(second.bagId))
+}
+
 export const buildAlertItems = (records: SensorRecord[], limit = 12): AlertItem[] => {
   return records
     .filter(isAnomalousRecord)
@@ -745,4 +828,52 @@ export const buildAlertItems = (records: SensorRecord[], limit = 12): AlertItem[
         status: getAlertStatus(severity),
       }
     })
+}
+
+export interface TiltKpiMetrics {
+  safePercentage: number
+  warningPercentage: number
+  unsafePercentage: number
+  alertCount: number
+  totalRecords: number
+}
+
+const TILT_WARNING_THRESHOLD = 20
+const TILT_UNSAFE_THRESHOLD = 30
+
+export const buildTiltKpiMetrics = (records: SensorRecord[]): TiltKpiMetrics => {
+  if (records.length === 0) {
+    return {
+      safePercentage: 0,
+      warningPercentage: 0,
+      unsafePercentage: 0,
+      alertCount: 0,
+      totalRecords: 0,
+    }
+  }
+
+  let safeCount = 0
+  let warningCount = 0
+  let unsafeCount = 0
+  let alertCount = 0
+
+  records.forEach((record) => {
+    if (record.tiltDeg < TILT_WARNING_THRESHOLD) {
+      safeCount += 1
+    } else if (record.tiltDeg < TILT_UNSAFE_THRESHOLD) {
+      warningCount += 1
+      alertCount += 1
+    } else {
+      unsafeCount += 1
+      alertCount += 1
+    }
+  })
+
+  return {
+    safePercentage: (safeCount / records.length) * 100,
+    warningPercentage: (warningCount / records.length) * 100,
+    unsafePercentage: (unsafeCount / records.length) * 100,
+    alertCount,
+    totalRecords: records.length,
+  }
 }

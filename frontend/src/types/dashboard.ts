@@ -75,6 +75,8 @@ export interface KpiMetric {
 }
 
 export interface TrendPoint {
+  timestamp: string
+  epochTime: number
   time: string
   temperatureC: number
   coldTemperatureC?: number
@@ -111,10 +113,16 @@ export interface BagLidEventPoint {
   epochTime: number
   timeLabel: string
   bagId: string
+  bagName: string
   bagOrder: number
   route: string
+  routeName: string | null
+  riderId: string | null
+  riderName: string | null
+  deliveryId: string | null
   eventType: BagLidEventType
   deliveryPhase: DeliveryPhase
+  deliveryStatus: 'IDLE' | 'STARTED' | 'IN_TRANSIT' | 'COMPLETED'
   isUnexpected: boolean
 }
 
@@ -122,6 +130,11 @@ export interface LeakTrendPoint {
   time: string
   incidentCount: number
   impactedBagCount: number
+}
+
+export interface LeakBagDistributionItem {
+  bagId: string
+  leakCount: number
 }
 
 export interface LeakStatusSummary {

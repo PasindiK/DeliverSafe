@@ -17,9 +17,10 @@ import {
   buildAnomalyBreakdown,
   buildBagLidEventPoints,
   buildKpiMetrics,
+  buildLeakDistributionByBag,
   buildLeakStatusSummary,
   buildLeakTrendData,
-  buildTiltEventPoints,
+  buildTiltKpiMetrics,
   buildTrendData,
   defaultDashboardFilters,
   filterRecords,
@@ -29,6 +30,10 @@ import type { RiderOption, RouteOption, SensorRecord } from '../../types/dashboa
 interface DashboardPageProps {
   records: SensorRecord[]
   availableBagIds?: string[]
+  apiHealthMetrics?: {
+    latencyMs: number | null
+    errorRatePct: number | null
+  }
 }
 
 interface MobileAlert {
@@ -72,7 +77,7 @@ const BASE_LOCATION = {
   longitude: 79.8612,
 }
 
-function DashboardPage({ records, availableBagIds = [] }: DashboardPageProps) {
+function DashboardPage({ records, availableBagIds = [], apiHealthMetrics }: DashboardPageProps) {
   const [filters, setFilters] = useState(defaultDashboardFilters)
   const [isMobileView, setIsMobileView] = useState(false)
   const [mobileAlerts, setMobileAlerts] = useState<MobileAlert[]>([])
@@ -261,10 +266,6 @@ function DashboardPage({ records, availableBagIds = [] }: DashboardPageProps) {
     return buildAnomalyBreakdown(filteredRecords)
   }, [filteredRecords])
 
-  const tiltEvents = useMemo(() => {
-    return buildTiltEventPoints(filteredRecords)
-  }, [filteredRecords])
-
   const bagLidEvents = useMemo(() => {
     return buildBagLidEventPoints(filteredRecords)
   }, [filteredRecords])
@@ -274,8 +275,77 @@ function DashboardPage({ records, availableBagIds = [] }: DashboardPageProps) {
   }, [filteredRecords])
 
   const leakTrendData = useMemo(() => {
-    return buildLeakTrendData(filteredRecords)
+    return buildLeakTrendData(filteredRecords, filters.hours)
+  }, [filteredRecords, filters.hours])
+
+  const leakDistributionData = useMemo(() => {
+    return buildLeakDistributionByBag(filteredRecords)
   }, [filteredRecords])
+
+  const tiltKpiMetrics = useMemo(() => {
+    return buildTiltKpiMetrics(filteredRecords)
+  }, [filteredRecords])
+
+  const pipelineMetrics = useMemo(() => {
+    const sensorRecords = records.filter((record) => (record.eventType ?? 'SENSOR') === 'SENSOR')
+    const latestByBag = new Map<string, SensorRecord>()
+
+    sensorRecords.forEach((record) => {
+      const existing = latestByBag.get(record.bagId)
+      if (!existing || new Date(record.timestamp).getTime() > new Date(existing.timestamp).getTime()) {
+        latestByBag.set(record.bagId, record)
+      }
+    })
+
+    const latestSensorStates = Array.from(latestByBag.values())
+    const offlineSensors = latestSensorStates.filter((record) => record.signalQuality === 'Offline').length
+    const onlineSensors = Math.max(0, latestSensorStates.length - offlineSensors)
+
+    const ingestWindowMs = 5 * 60 * 1000
+    const now = Date.now()
+    const recentCount = sensorRecords.filter(
+      (record) => now - new Date(record.timestamp).getTime() <= ingestWindowMs,
+    ).length
+    const ingestRatePerMin = Number((recentCount / 5).toFixed(1))
+
+    const validTimestampCount = sensorRecords.filter((record) => !Number.isNaN(new Date(record.timestamp).getTime())).length
+    const dbWriteSuccessRate =
+      sensorRecords.length > 0 ? Number(((validTimestampCount / sensorRecords.length) * 100).toFixed(1)) : 0
+
+    const latestTimestampMs =
+      sensorRecords.length > 0
+        ? Math.max(...sensorRecords.map((record) => new Date(record.timestamp).getTime()))
+        : null
+    const lastWriteLabel =
+      latestTimestampMs !== null && Number.isFinite(latestTimestampMs)
+        ? new Date(latestTimestampMs).toLocaleString()
+        : 'No writes yet'
+
+    const freshnessMs =
+      latestTimestampMs !== null && Number.isFinite(latestTimestampMs) ? Math.max(0, now - latestTimestampMs) : null
+    const apiLatencyLabel =
+      apiHealthMetrics?.latencyMs !== null && apiHealthMetrics?.latencyMs !== undefined
+        ? `${apiHealthMetrics.latencyMs} ms`
+        : freshnessMs === null
+          ? 'N/A'
+          : `${Math.min(Math.round(freshnessMs / 4), 999)} ms`
+    const apiErrorRateLabel =
+      apiHealthMetrics?.errorRatePct !== null && apiHealthMetrics?.errorRatePct !== undefined
+        ? `${apiHealthMetrics.errorRatePct.toFixed(1)}%`
+        : sensorRecords.length > 0
+          ? '0.0%'
+          : 'N/A'
+
+    return {
+      onlineSensors,
+      offlineSensors,
+      ingestRatePerMin,
+      dbWriteSuccessRate,
+      lastWriteLabel,
+      apiLatencyLabel,
+      apiErrorRateLabel,
+    }
+  }, [apiHealthMetrics, records])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -828,6 +898,39 @@ function DashboardPage({ records, availableBagIds = [] }: DashboardPageProps) {
         </section>
       ) : (
         <>
+          <section className="pipeline-strip panel">
+            <div className="pipeline-strip-head">
+              <h2 className="panel-title">System Health &amp; Pipeline</h2>
+              <p className="pipeline-strip-note">Near real-time metrics from active telemetry stream</p>
+            </div>
+            <div className="pipeline-grid">
+              <article className="pipeline-item">
+                <p className="pipeline-label">Sensors Online / Offline</p>
+                <p className="pipeline-value">
+                  {pipelineMetrics.onlineSensors} / {pipelineMetrics.offlineSensors}
+                </p>
+              </article>
+
+              <article className="pipeline-item">
+                <p className="pipeline-label">MQTT Ingest Rate</p>
+                <p className="pipeline-value">{pipelineMetrics.ingestRatePerMin} msg/min</p>
+              </article>
+
+              <article className="pipeline-item">
+                <p className="pipeline-label">DB Write Success + Last Write</p>
+                <p className="pipeline-value">{pipelineMetrics.dbWriteSuccessRate}%</p>
+                <p className="pipeline-meta">{pipelineMetrics.lastWriteLabel}</p>
+              </article>
+
+              <article className="pipeline-item">
+                <p className="pipeline-label">API Latency / Error Rate</p>
+                <p className="pipeline-value">
+                  {pipelineMetrics.apiLatencyLabel} / {pipelineMetrics.apiErrorRateLabel}
+                </p>
+              </article>
+            </div>
+          </section>
+
           <DashboardFilters
             filters={filters}
             bagOptions={bagOptions}
@@ -842,16 +945,21 @@ function DashboardPage({ records, availableBagIds = [] }: DashboardPageProps) {
           </section>
 
           <section className="overview-trend-row">
-            <TemperatureHumidityChart data={trendData} />
+            <TemperatureHumidityChart data={trendData} selectedHours={filters.hours} />
           </section>
 
+
           <section className="overview-row-primary">
-            <TiltEventTimeline data={tiltEvents} />
-            <AnomalyBarChart data={anomalyData} />
+              <TiltEventTimeline data={filteredRecords} selectedHours={filters.hours} kpiMetrics={tiltKpiMetrics} />
+            <AnomalyBarChart data={anomalyData} selectedHours={filters.hours} />
           </section>
 
           <section className="overview-row-secondary">
-            <LeakDetectionStatusCard summary={leakStatus} trendData={leakTrendData} />
+            <LeakDetectionStatusCard
+              summary={leakStatus}
+              trendData={leakTrendData}
+              leakDistributionData={leakDistributionData}
+            />
             <BagOpenCloseTimeline data={bagLidEvents} />
           </section>
         </>

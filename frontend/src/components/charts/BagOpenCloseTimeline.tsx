@@ -1,147 +1,108 @@
 import { useMemo } from 'react'
-import {
-  CartesianGrid,
-  Legend,
-  ResponsiveContainer,
-  Scatter,
-  ScatterChart,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
 import type { BagLidEventPoint } from '../../types/dashboard'
 
 interface BagOpenCloseTimelineProps {
   data: BagLidEventPoint[]
 }
 
-interface BagEventTooltipProps {
-  active?: boolean
-  payload?: Array<{ payload: BagLidEventPoint }>
-}
+type BagStatusTone = 'start' | 'in-transit' | 'end'
 
-function BagEventTooltip({ active, payload }: BagEventTooltipProps) {
-  if (!active || !payload || payload.length === 0) {
-    return null
+function getBagStatusMeta(event: BagLidEventPoint): { label: string; tone: BagStatusTone } {
+  if (event.deliveryStatus === 'IN_TRANSIT') {
+    return { label: 'In Transit', tone: 'in-transit' }
   }
 
-  const event = payload[0].payload
-  const icon = event.eventType === 'Open' ? '🔓' : '🔒'
-  const contextLabel = event.isUnexpected ? 'Unexpected in-transit opening' : 'Expected handling event'
+  if (event.deliveryStatus === 'STARTED') {
+    return { label: 'Start', tone: 'start' }
+  }
 
-  return (
-    <div className="timeline-tooltip">
-      <p className="timeline-tooltip-title">
-        {icon} Bag {event.eventType}
-      </p>
-      <p>
-        <strong>Bag:</strong> {event.bagId}
-      </p>
-      <p>
-        <strong>Route:</strong> {event.route}
-      </p>
-      <p>
-        <strong>Phase:</strong> {event.deliveryPhase}
-      </p>
-      <p>
-        <strong>Time:</strong> {new Date(event.timestamp).toLocaleString()}
-      </p>
-      <p>
-        <strong>Context:</strong> {contextLabel}
-      </p>
-    </div>
-  )
+  if (event.deliveryStatus === 'COMPLETED') {
+    return { label: 'End', tone: 'end' }
+  }
+
+  if (event.deliveryPhase === 'Transit') {
+    return { label: 'In Transit', tone: 'in-transit' }
+  }
+
+  if (event.deliveryPhase === 'Dropoff') {
+    return { label: 'End', tone: 'end' }
+  }
+
+  return { label: 'Start', tone: 'start' }
 }
 
 function BagOpenCloseTimeline({ data }: BagOpenCloseTimelineProps) {
-  const bagLabelMap = useMemo(() => {
-    return new Map(data.map((event) => [event.bagOrder, event.bagId]))
-  }, [data])
-
-  const highestBagOrder = useMemo(() => {
-    return data.reduce((highest, event) => Math.max(highest, event.bagOrder), 1)
-  }, [data])
-
-  const { expectedOpenEvents, unexpectedOpenEvents, closeEvents } = useMemo(() => {
-    const openEvents = data.filter((event) => event.eventType === 'Open')
-
-    return {
-      expectedOpenEvents: openEvents.filter((event) => !event.isUnexpected),
-      unexpectedOpenEvents: openEvents.filter((event) => event.isUnexpected),
-      closeEvents: data.filter((event) => event.eventType === 'Close'),
-    }
-  }, [data])
-
-  const xDomain = useMemo(() => {
-    if (data.length === 0) {
-      return [0, 1]
-    }
-
-    const min = data[0].epochTime
-    const max = data[data.length - 1].epochTime
-
-    if (min === max) {
-      const padding = 30 * 60 * 1000
-      return [min - padding, max + padding]
-    }
-
-    return [min, max]
+  const openingLogs = useMemo(() => {
+    return data
+      .filter((event) => event.eventType === 'Open')
+      .slice()
+      .sort((first, second) => second.epochTime - first.epochTime)
   }, [data])
 
   return (
     <section className="panel">
-      <h2 className="panel-title">Bag Open / Close Event Timeline</h2>
+      <h2 className="panel-title">Bag Opening Event Logs</h2>
       <p className="panel-subtitle">
-        Tracks expected handling actions and highlights abnormal in-transit opening events.
+        Opening logs with key DB details for operations and incident tracking.
       </p>
 
-      {data.length === 0 ? (
-        <div className="empty-state">No open or close state changes detected.</div>
-      ) : (
-        <div className="chart-wrap">
-          <ResponsiveContainer width="100%" height={340}>
-            <ScatterChart margin={{ top: 12, right: 10, left: 0, bottom: 8 }}>
-              <CartesianGrid strokeDasharray="4 4" stroke="#d7dfeb" />
-              <XAxis
-                type="number"
-                dataKey="epochTime"
-                domain={xDomain}
-                tick={{ fontSize: 12 }}
-                tickFormatter={(value) =>
-                  new Date(Number(value)).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })
-                }
-              />
-              <YAxis
-                type="number"
-                dataKey="bagOrder"
-                domain={[0, highestBagOrder + 1]}
-                tickCount={highestBagOrder + 1}
-                allowDecimals={false}
-                tick={{ fontSize: 12 }}
-                tickFormatter={(value) => bagLabelMap.get(Number(value)) ?? ''}
-              />
-              <Tooltip content={<BagEventTooltip />} cursor={{ strokeDasharray: '3 3' }} />
-              <Legend verticalAlign="top" height={30} />
-              <Scatter
-                name="🔓 Expected open"
-                data={expectedOpenEvents}
-                fill="#16A34A"
-                shape="circle"
-              />
-              <Scatter
-                name="⚠️ Unexpected transit open"
-                data={unexpectedOpenEvents}
-                fill="#DC2626"
-                shape="diamond"
-              />
-              <Scatter name="🔒 Close event" data={closeEvents} fill="#2563EB" shape="triangle" />
-            </ScatterChart>
-          </ResponsiveContainer>
+      <div className="timeline-log-section">
+        <div className="timeline-log-header">
+          <h3 className="timeline-log-title">Opening Logs</h3>
+          <span className="table-chip">{openingLogs.length} events</span>
         </div>
-      )}
+
+        {openingLogs.length === 0 ? (
+          <div className="empty-state">No bag opening events detected in this time window.</div>
+        ) : (
+          <div className="table-wrap">
+            <table className="alert-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Ride ID</th>
+                  <th>Bag Name</th>
+                  <th>Route</th>
+                  <th>Bag Status</th>
+                  <th>Alert</th>
+                </tr>
+              </thead>
+              <tbody>
+                {openingLogs.map((event) => {
+                  const bagStatus = getBagStatusMeta(event)
+                  const routeLabel = event.routeName ?? event.route
+                  return (
+                    <tr key={event.id}>
+                      <td className="cell-time">{new Date(event.timestamp).toLocaleString()}</td>
+                      <td>Rider 1</td>
+                      <td>
+                        <span className="bag-pill">{event.bagName}</span>
+                      </td>
+                      <td>{routeLabel}</td>
+                      <td>
+                        <span className={`timeline-status-pill timeline-status-${bagStatus.tone}`}>
+                          {bagStatus.label}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          className={`timeline-alert-pill ${
+                            event.isUnexpected
+                              ? 'timeline-alert-pill-unexpected'
+                              : 'timeline-alert-pill-expected'
+                          }`}
+                        >
+                          {event.isUnexpected ? 'Unexpected opening' : 'Expected opening'}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </section>
   )
 }
